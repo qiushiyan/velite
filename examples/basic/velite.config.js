@@ -1,5 +1,7 @@
 // @ts-check
 
+import { exec } from 'node:child_process'
+import { promisify } from 'node:util'
 import { defineConfig, s } from 'velite'
 
 const slugify = input =>
@@ -18,6 +20,18 @@ const meta = s
     keywords: s.array(s.string()).optional()
   })
   .default({})
+
+const execAsync = promisify(exec)
+const timestamp = () =>
+  s
+    .custom(i => i === undefined || typeof i === 'string')
+    .transform(async (value, { meta, addIssue }) => {
+      if (value != null) {
+        addIssue({ fatal: false, code: 'custom', message: '`s.timestamp()` schema will resolve the value from `git log -1 --format=%cd`' })
+      }
+      const { stdout } = await execAsync(`git log -1 --format=%cd ${meta.path}`)
+      return new Date(stdout || Date.now()).toISOString()
+    })
 
 export default defineConfig({
   root: 'content',
@@ -89,7 +103,7 @@ export default defineConfig({
           title: s.string().max(99),
           slug: s.path(),
           date: s.isodate(),
-          updated: s.isodate().optional(),
+          updated: timestamp(),
           cover: s.image().optional(),
           video: s.file().optional(),
           description: s.string().max(999).optional(),
@@ -106,26 +120,25 @@ export default defineConfig({
         .transform(data => ({ ...data, permalink: `/blog/${data.slug}` }))
     }
   },
-  prepare: collections => {
-    const { categories, tags, posts } = collections
+  prepare: ({ categories, tags, posts }) => {
     const docs = posts.filter(i => process.env.NODE_ENV !== 'production' || !i.draft)
 
     // missing categories, tags from posts or courses inlined
-    const categoriesFromDoc = Array.from(new Set(docs.map(item => item.categories).flat())).filter(i => categories.find(j => j.name === i) == null)
+    const categoriesFromDoc = Array.from(new Set(docs.flatMap(i => i.categories))).filter(i => categories.find(j => j.name === i) == null)
     categories.push(...categoriesFromDoc.map(name => ({ name, slug: slugify(name), permalink: '', count: { total: 0, posts: 0 } })))
-    categories.forEach(i => {
-      i.count.posts = posts.filter(j => j.categories.includes(i.name)).length
-      i.count.total = i.count.posts
-      i.permalink = `/${i.slug}`
-    })
+    for (const category of categories) {
+      category.count.posts = posts.filter(j => j.categories.includes(category.name)).length
+      category.count.total = category.count.posts
+      category.permalink = `/${category.slug}`
+    }
 
-    const tagsFromDoc = Array.from(new Set(docs.map(item => item.tags).flat())).filter(i => tags.find(j => j.name === i) == null)
+    const tagsFromDoc = Array.from(new Set(docs.flatMap(i => i.tags))).filter(i => tags.find(j => j.name === i) == null)
     tags.push(...tagsFromDoc.map(name => ({ name, slug: slugify(name), permalink: '', count: { total: 0, posts: 0 } })))
-    tags.forEach(i => {
-      i.count.posts = posts.filter(j => j.tags.includes(i.name)).length
-      i.count.total = i.count.posts
-      i.permalink = `/${i.slug}`
-    })
+    for (const tag of tags) {
+      tag.count.posts = posts.filter(j => j.tags.includes(tag.name)).length
+      tag.count.total = tag.count.posts
+      tag.permalink = `/${tag.slug}`
+    }
 
     // push extra data to collections, it's ok!! but they are not type-safed
     // Object.assign(collections, {
